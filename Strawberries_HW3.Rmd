@@ -1,0 +1,489 @@
+---
+title: "Strawberries_HW3"
+author: "Jie Fei"
+output: html_document
+---
+
+```{r}
+# data cleaning and organization
+
+library(knitr)  
+library(kableExtra)
+library(tidyverse)
+library(stringr)
+
+# read the strawberry data
+strawberry <- read_csv("strawberries25_v3.csv", col_names = TRUE)
+glimpse(strawberry)
+```
+
+```{r}
+# examine the data. How is it organized?
+
+# is every line associated with a state?
+state_all <- strawberry |> distinct(State)
+state_all1 <- strawberry |> group_by(State) |> count()
+
+# every row is associated with a state
+sum(state_all1$n) == dim(strawberry)[1]
+
+# to get an idea of the data -- looking at california only
+calif_census <- strawberry |> filter((State == "CALIFORNIA") & (Program == "CENSUS"))
+calif_census <- calif_census |> select(Year, `Data Item`, Value)
+
+calif_survey <- strawberry |> filter((State == "CALIFORNIA") & (Program == "SURVEY"))
+calif_survey <- strawberry |> select(Year, Period, `Data Item`, Value)
+```
+
+```{r}
+# remove columns with a single value in all columns
+
+drop_one_value_col <- function(df){
+drop <- NULL
+for(i in 1:dim(df)[2]){
+if((df |> distinct(df[,i]) |> count()) == 1){
+drop = c(drop, i)
+} }
+
+if(is.null(drop)){return("none")}else{
+
+   print("Columns dropped:")
+   print(colnames(df)[drop])
+   strawberry <- df[, -1*drop]
+   }
+}
+
+# use the function
+strawberry <- drop_one_value_col(strawberry)
+drop_one_value_col(strawberry)
+```
+
+```{r}
+# separate composite columns
+
+strawberry <- strawberry |>
+separate_wider_delim( cols = `Data Item`,
+                      delim = ",",
+                      names = c("Fruit",
+                                 "Category",
+                                 "Item",
+                                 "Metric"),
+                      too_many = "error",
+                      too_few = "align_start"
+                    )
+```
+
+```{r}
+# fix the leading space problem
+
+strawberry$Category[1]
+
+# trim white space 
+strawberry$Category <- str_trim(strawberry$Category, side = "both")
+strawberry$Item <- str_trim(strawberry$Item, side = "both")
+strawberry$Metric <- str_trim(strawberry$Metric, side = "both")
+```
+
+```{r}
+# exam the fruit column and find hidden sub-columns
+
+unique(strawberry$Fruit)
+
+# generate a list of rows with the production and price information
+spr <- which((strawberry$Fruit == "STRAWBERRIES - PRODUCTION") | (strawberry$Fruit == "STRAWBERRIES - PRICE RECEIVED"))
+strw_prod_price <- strawberry |> slice(spr)
+
+# this has the census data, too
+strw_chem <- strawberry |> slice(-1*spr)  ## too soon
+```
+
+```{r}
+# exam the rest of columns and split sales and chemicals into two dataframes
+
+strw_b_sales <- strawberry |> filter(Program == "CENSUS")
+strw_b_chem <- strawberry |> filter(Program == "SURVEY")
+nrow(strawberry) == (nrow(strw_b_chem) + nrow(strw_b_sales))
+```
+
+```{r}
+# export the cleaned strawberry data
+
+write.csv(strawberry, "cleaned_strawberry.csv", row.names = FALSE)
+```
+
+```{r}
+# data analysis and plots
+
+# number of organic strawberry operations with sales in 2021
+plot1_data <- strawberry |> 
+  select(c(Year, State, Category, Value)) |> 
+  filter((Year == 2021) & (Category == "ORGANIC - OPERATIONS WITH SALES"))
+
+plot1_data$Value <- as.numeric(plot1_data$Value)
+
+plot1_data <- plot1_data |> arrange(desc(Value))
+
+ggplot(plot1_data, aes(x = reorder(State, -Value), y = Value)) + 
+  geom_bar(stat = "identity") + 
+  theme(axis.text.x = element_text(angle = 45,hjust = 1)) +
+  labs(x = "States", y = "Count",
+title = "Number of Organic Strawberry operations with Sales in 2021")
+```
+
+```{r}
+# read the cleaned strawberry and chemical data
+strawberry <- read.csv("/Users/jie/Library/CloudStorage/OneDrive-BostonUniversity/Main Folder/02 Courses/PhD (BU)/2024 Fall/MA615 Data Science in R/HW/Strawberry HW/cleaned_strawberry.csv")
+
+# load required package
+library(dplyr)
+library(tidyr)
+library(reader)
+library(ggplot2)
+library(tidyverse)
+# install.packages('PubChemR')
+library(PubChemR)
+```
+
+```{r}
+### clean and organize data set as needed
+
+# remove null value where the value column is (D) and (NA)
+strawberry <- strawberry[strawberry$Value != "(D)" & strawberry$Value != "(NA)", ]
+
+# keep data only from California and Florida
+# the analysis will focus on these two states
+strawberry2 <- subset(strawberry, State %in% c("CALIFORNIA", "FLORIDA"))
+
+# create subset for specific domains
+strawberry_total <- subset(strawberry2, Domain == "TOTAL")
+strawberry_area <- subset(strawberry2, Domain == "AREA GROWN")
+strawberry_organic <- subset(strawberry2, Domain == "ORGANIC STATUS")
+strawberry_chemical <- subset(strawberry2, !(Domain %in% c("TOTAL", "AREA GROWN", "ORGANIC STATUS")))
+
+# in chemical data set, split the domain column and create two new columns (new domain and sub domain)
+strawberry_chemical2 <- strawberry_chemical %>%
+  mutate(
+    New_Domain = ifelse(grepl(",", Domain), trimws(sapply(strsplit(as.character(Domain), ","), `[`, 1)), NA),
+    Sub_Domain = ifelse(grepl(",", Domain), trimws(sapply(strsplit(as.character(Domain), ","), `[`, 2)), Domain)
+  )
+
+# split the domain category column and create two new columns (domain category and code)
+strawberry_chemical2 <- strawberry_chemical2 %>%
+  mutate(
+    Domain_Category = ifelse(grepl("=", `Domain.Category`), 
+                                    trimws(sub(".*\\(([^=]+)=.*\\)", "\\1", `Domain.Category`)), 
+                                    trimws(sub(".*\\(([^)]+)\\).*", "\\1", `Domain.Category`))),
+                                    
+    Code = ifelse(grepl("=", `Domain.Category`), 
+                                    trimws(sub(".*=\\s*([^)]+)\\).*", "\\1", `Domain.Category`)), 
+                                    NA)
+  )
+
+# remove old columns
+strawberry_chemical2 <- strawberry_chemical2 %>% select(-Domain)
+strawberry_chemical2 <- strawberry_chemical2 %>% select(-`Domain.Category`)
+
+# display 5 sample rows to double check
+strawberry_chemical2_display <- strawberry_chemical2 %>%
+  head(5)
+
+print(strawberry_chemical2_display)
+```
+
+```{r}
+### Analysis 1
+### What are the total usage pattern of fertilizers and chemicals in each state across different years (2018-2023)?
+
+# read data
+strawberry_chemical2_item_mib <- read.csv("strawberry_chemical2_item_mib.csv")
+
+# filter data only for California
+california_usage <- strawberry_chemical2_item_mib %>%
+  filter(State == "CALIFORNIA") %>%
+  group_by(Year, Sub_Domain) %>%
+  summarize(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# plotting the heat map for California
+ggplot(california_usage, aes(x = Year, y = Sub_Domain, fill = Total_Value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightyellow", high = "red") +
+  theme_minimal() +
+  labs(
+    title = "Usage of Each Subdomain by Year in California (2018–2023)",
+    x = "Year",
+    y = "Subdomain",
+    fill = "Total Value"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# filter data only for Florida
+florida_usage <- strawberry_chemical2_item_mib %>%
+  filter(State == "FLORIDA") %>%
+  group_by(Year, Sub_Domain) %>%
+  summarize(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# plotting the heat map for Florida
+ggplot(florida_usage, aes(x = Year, y = Sub_Domain, fill = Total_Value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightyellow", high = "red") +
+  theme_minimal() +
+  labs(
+    title = "Usage of Each Subdomain by Year in Florida (2018–2023)",
+    x = "Year",
+    y = "Subdomain",
+    fill = "Total Value"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# The figures compare agricultural chemical usage by sub domain (fertilizers, fungicides, herbicides, insecticides, and others) between California and Florida from 2018 to 2023. In California, fertilizers and "other" chemicals show the highest usage, with a consistent trend over the years, while fungicides, herbicides, and insecticides have relatively low and stable usage. The color intensity indicates a broader range of total values, with California’s overall chemical usage exceeding Florida’s.
+
+# In Florida, fertilizer usage is also prominent, especially in 2019 and 2023. Fungicides also show significant usage but at lower levels than fertilizers, while herbicides and insecticides remain minimal across the years. The color scale for Florida highlights a lower total usage range than California, indicating that California uses more agricultural chemicals overall. These differences underscore regional variations in agricultural practices and chemical dependency.
+```
+
+```{r}
+### Analysis 2
+### What are the differences in the usage of each chemical or fertilizer between Florida and California each year？
+
+# filter data for California and Florida, and aggregate by Year, State, and Domain_Category
+domain_comparison <- strawberry_chemical2_item_mib %>%
+  filter(State %in% c("CALIFORNIA", "FLORIDA")) %>%
+  filter(Domain_Category != "TOTAL") %>%
+  group_by(Year, State, Domain_Category) %>%
+  summarise(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  arrange(Year, Domain_Category, State)
+
+# pivot the data to compare California and Florida side by side
+domain_comparison_wide <- domain_comparison %>%
+  pivot_wider(names_from = State, values_from = Total_Value, values_fill = 0) %>%
+  rename(California_Usage = CALIFORNIA, Florida_Usage = FLORIDA)
+
+print(domain_comparison_wide)
+
+# Our results were similar to those in Analysis 2, showing that each state has its own unique patterns and trends in chemical and fertilizer usage.
+```
+
+```{r}
+### Analysis 3
+### What are the detailed total usage pattern of fertilizers and chemicals in California across different years (2018-2023)?
+
+# filter data only for California
+california_usage <- strawberry_chemical2_item_mib %>%
+  filter(State == "CALIFORNIA") %>%
+  group_by(Year, Domain_Category) %>%
+  summarize(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# plotting the heat map for California
+ggplot(california_usage, aes(x = Year, y = Domain_Category, fill = Total_Value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightyellow", high = "red") +
+  theme_minimal() +
+  labs(
+    title = "Usage of Each Subdomain by Year in California (2018–2023)",
+    x = "Year",
+    y = "Subdomain",
+    fill = "Total Value"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+# The heat map illustrates the usage of various chemicals and fertilizers sub domains in California from 2018 to 2023, with each row representing a different sub domain and each column corresponding to a specific year. The intensity of color (from light yellow to deep red) reflects the total usage amount, as indicated by the color scale on the right; darker shades represent higher usage levels, with the highest concentrations close to 15 million units shown in dark red. The chart highlights trends in chemicals and fertilizers usage, with some chemicals and fertilizers showing significant spikes in specific years, marked by intense red blocks, while others have consistently low or no usage across the years, represented by lighter yellow or white blocks. Gaps or lighter colors between years for certain chemicals and fertilizers suggest either low, inconsistent, or non-continuous application of these substances, indicating variable demand or regulatory changes over time.
+```
+
+```{r}
+### Analysis 4
+### What are the top 3 most used substances in each sub domain each year in California?
+
+# filter out rows where Domain_Category is "TOTAL" and find top 3 substances in each Sub_Domain (chemicals and fertilizers)
+top_substances <- strawberry_chemical2_item_mib %>%
+  filter(Domain_Category != "TOTAL" & State == "CALIFORNIA") %>%
+  group_by(Year, Sub_Domain, Domain_Category) %>%
+  summarise(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  arrange(Year, Sub_Domain, desc(Total_Value)) %>%
+  group_by(Year, Sub_Domain) %>%
+  slice_max(order_by = Total_Value, n = 3)
+
+# display the result
+print(top_substances)
+```
+
+```{r}
+### Analysis 5
+### What are structure/composition/function/potential hazards of the top 3 most used substances in each sub domain for each year in California?
+
+# function 1
+GHS_searcher<-function(result_json_object){
+  result<-result_json_object
+  for (i in 1:length(result[["result"]][["Hierarchies"]][["Hierarchy"]])){
+    if(result[["result"]][["Hierarchies"]][["Hierarchy"]][[i]][["SourceName"]]=="GHS Classification (UNECE)"){
+      return(i)
+    }
+  }
+}
+
+# function 2
+hazards_retriever<-function(index,result_json_object){
+  result<-result_json_object
+  hierarchy<-result[["result"]][["Hierarchies"]][["Hierarchy"]][[index]]
+  i<-1
+  output_list<-rep(NA,length(hierarchy[["Node"]]))
+  while(str_detect(hierarchy[["Node"]][[i]][["Information"]][["Name"]],"H") & i<length(hierarchy[["Node"]])){
+    output_list[i]<-hierarchy[["Node"]][[i]][["Information"]][["Name"]]
+    i<-i+1
+  }
+  return(output_list[!is.na(output_list)])
+}
+
+# function to safely retrieve information if it exists
+safe_get <- function(x, ...) {
+  result <- tryCatch({
+    Reduce(function(x, name) if (!is.null(x) && name %in% names(x)) x[[name]] else NULL, list(x, ...))
+  }, error = function(e) NULL)
+  result
+}
+
+# extract unique Domain_Category values
+unique_categories <- unique(top_substances$Domain_Category)
+
+# initialize a list to store results
+result_list <- list()
+
+# loop through each unique category
+for (category in unique_categories) {
+  # retrieve data using get_pug_rest for each category
+  result_d <- get_pug_rest(
+    identifier = category,
+    namespace = "name",
+    domain = "compound",
+    operation = "classification",
+    output = "JSON"
+  )
+  
+  # check if result_d contains expected data structure
+  if (!is.null(safe_get(result_d, "result", "Hierarchies", "Hierarchy"))) {
+    # process the retrieved data
+    hazard_info <- hazards_retriever(GHS_searcher(result_d), result_d)
+    
+    # store the results in the list
+    result_list[[category]] <- hazard_info
+  } else {
+    # handle cases where data is missing
+    result_list[[category]] <- "Data not available"
+  }
+}
+
+# view result_list
+print(result_list)
+
+# The structure/composition/function/potential hazards of the top 3 most used substances in each sub domain for each year in California were showed below to get more details about these substances.
+```
+
+```{r}
+### Analysis 6
+### What is the difference in usage of each sub domain in unit of LB/ACRE/YEAR between California and Florida?
+
+# filter rows with "MEASURED IN LB / ACRE / YEAR"
+strawberry_chemical2_item_mibay <- subset(strawberry_chemical2, Item == "MEASURED IN LB / ACRE / YEAR")
+
+# ensure the "value" column is cleaned and converted to numeric
+strawberry_chemical2_item_mibay$Value <- as.numeric(gsub(",", "", strawberry_chemical2_item_mibay$Value))
+
+# filter for California and Florida
+strawberry_chemical2_item_mibay <- subset(strawberry_chemical2_item_mibay, State %in% c("CALIFORNIA", "FLORIDA"))
+
+# calculate the total "Value" for each "Sub_Domain" by state
+sub_domain_comparison <- strawberry_chemical2_item_mibay %>%
+  group_by(State, Sub_Domain) %>%
+  summarize(Total_Value = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# reshape the data for plotting
+sub_domain_plot_data <- sub_domain_comparison %>%
+  pivot_wider(names_from = State, values_from = Total_Value) %>%
+  mutate(Difference_CA_FL = CALIFORNIA - FLORIDA)
+
+# gather the data into long format for ggplot
+plot_data <- sub_domain_plot_data %>%
+  pivot_longer(cols = c("CALIFORNIA", "FLORIDA"),
+               names_to = "Metric",
+               values_to = "Total_Value")
+
+# create the bar plot
+ggplot(plot_data, aes(x = Sub_Domain, y = Total_Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Total Values of Sub_Domains",
+       x = "Sub Domain",
+       y = "Total Value",
+       fill = "Metric") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# The bar plot compares the total values of various sub-domains (FERTILIZER, FUNGICIDE, HERBICIDE, INSECTICIDE, and OTHER) between California and Florida. California consistently shows higher totals across all sub-domains, with particularly large differences in "FERTILIZER" and "OTHER," where its values are significantly greater than Florida's. In sub-domains like "FUNGICIDE," "HERBICIDE," and "INSECTICIDE," the differences are less pronounced but still favor California. This disparity likely reflects differences in agricultural scale, practices, or crop requirements between the two states, with California exhibiting a much larger usage or application of the items measured.
+
+# Unlike the analysis above, we used the unit 'MEASURED IN LB / ACRE / YEAR.' Below, I’ve shared my thoughts on the differences between using these two units in data analysis. The unit **"MEASURED IN LB"** represents the total quantity of a substance in pounds, without specifying how it is distributed across an area or over time, providing only a general measure of the total amount used or produced. In contrast, **"MEASURED IN LB / ACRE / YEAR"** normalizes the substance's application by area (per acre) and time (per year), offering a more specific and actionable metric. This normalized unit is particularly useful for comparing application rates across regions, assessing environmental impacts, or evaluating farming efficiency. While "LB" gives an overall quantity, "LB / ACRE / YEAR" provides context about application intensity, making it more relevant for detailed agricultural or environmental analysis.
+```
+```{r}
+### Analysis 7
+### What is the relationship between the production in CWT of strawberries  and the usage of each sub domain each year in California?
+
+# load the datasets
+chemicals_data <- strawberry_chemical2_item_mibay
+production_data <- strawberry_total
+
+# clean the "Value" column in both datasets
+chemicals_data$Value <- as.numeric(gsub(",", "", chemicals_data$Value))
+production_data$Value <- as.numeric(gsub(",", "", production_data$Value))
+
+# filter for California data
+california_chemicals <- chemicals_data %>%
+  filter(State == "CALIFORNIA")
+
+california_production <- production_data %>%
+  filter(State == "CALIFORNIA")
+
+# aggregate total sub-domain usage by year
+california_chemicals_aggregated <- california_chemicals %>%
+  group_by(Year, Sub_Domain) %>%
+  summarize(Total_Usage = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# aggregate production data by year
+california_production_aggregated <- california_production %>%
+  group_by(Year) %>%
+  summarize(Production_CWT = sum(Value, na.rm = TRUE)) %>%
+  ungroup()
+
+# merge the datasets on the 'Year' column
+merged_data <- california_chemicals_aggregated %>%
+  left_join(california_production_aggregated, by = "Year")
+
+# view the merged dataset
+print(merged_data)
+
+# plot the relationship between usage in each sub-domain and production
+ggplot(merged_data, aes(x = Production_CWT, y = Total_Usage, color = Sub_Domain)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Relationship Between Sub-Domain Usage and Strawberry Production",
+    x = "Production (CWT)",
+    y = "Total Usage",
+    color = "Sub-Domain"
+  ) +
+  theme_minimal()
+
+# The plot illustrates the relationship between the total usage of different chemical sub-domains (e.g., FERTILIZER, FUNGICIDE, HERBICIDE, INSECTICIDE, OTHER) and strawberry production (in CWT) in California. FERTILIZER usage shows a positive correlation with production, indicating that higher fertilizer use corresponds to increased strawberry yields. Conversely, the OTHER category demonstrates a negative correlation, where its usage decreases as production rises. Sub-domains such as FUNGICIDE, HERBICIDE, and INSECTICIDE appear to have weak or negligible correlations with production, suggesting their usage might be relatively independent of yield levels. These trends highlight how specific chemical sub-domains may differently influence or relate to agricultural output.
+```
+Summarize:
+
+We investigated the relationship between strawberry production and the usage of various chemical sub-domains in California. The dataset was cleaned and organized, focusing on California-specific data and differentiating between census and survey records. Columns with minimal variation were removed, and the data was aggregated by year and sub-domain for a more meaningful analysis. The goal was to explore how chemical usage patterns correlated with strawberry yields and to uncover trends across different sub-domains.
+
+The analysis showed that fertilizer usage had a strong positive correlation with strawberry production. As production levels increased, the use of fertilizers rose consistently, suggesting its significant role in enhancing yields. This highlights the importance of fertilizers in supporting high-intensity strawberry farming in California. On the other hand, the OTHER sub-domain exhibited a negative correlation with production, indicating a potential reduction in its use as production becomes more efficient or as alternative practices are adopted.
+
+For sub-domains like fungicides, herbicides, and insecticides, the correlations with production were either weak or negligible. This implies that these chemical categories may not directly influence overall production levels or may be used in a more consistent manner regardless of yield fluctuations. These findings suggest that their application might be more related to pest and disease management rather than yield optimization.
+
+The visualizations provided additional insights into these relationships. Scatter plots with regression lines clearly demonstrated the trends for each sub-domain, allowing for easy identification of positive or negative correlations. Overall, this analysis underscores the critical role of fertilizers in driving strawberry production while revealing potential inefficiencies or evolving practices in other chemical sub-domains. These findings provide a foundation for further exploration of agricultural practices and their environmental impacts.
